@@ -1,0 +1,11 @@
+# Оба танка уничтожены одновременно на втором такте.
+field 3 1
+limit 10
+accuracy 100
+flight 1
+team A hold
+team B hold
+map
+...
+tank A 1 0 0 1 2
+tank B 1 2 0 1 2

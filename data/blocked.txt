@@ -1,0 +1,11 @@
+# A не может пройти сквозь стену, B останавливается в (2, 0).
+field 5 1
+limit 4
+accuracy 100
+flight 1
+team A advance
+team B advance
+map
+.#...
+tank A 1 0 0 2 1
+tank B 1 4 0 2 1

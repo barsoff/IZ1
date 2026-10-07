@@ -1,0 +1,13 @@
+# Два попадания в одном такте, прочность B1 должна стать 0, а не -1.
+field 5 2
+limit 5
+accuracy 100
+flight 1
+team A hold
+team B hold
+map
+.....
+.....
+tank A 1 0 0 5 5
+tank A 2 0 1 5 5
+tank B 1 3 0 1 5

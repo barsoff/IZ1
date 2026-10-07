@@ -1,0 +1,11 @@
+# Оба танка хотят в (1, 0). Никто не должен получить эту клетку.
+field 3 1
+limit 3
+accuracy 100
+flight 1
+team A advance
+team B advance
+map
+...
+tank A 1 0 0 2 1
+tank B 1 2 0 2 1

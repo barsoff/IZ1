@@ -1,0 +1,11 @@
+# B уезжает из клеток, в которые стреляет A.
+field 6 1
+limit 4
+accuracy 100
+flight 2
+team A hold
+team B advance
+map
+......
+tank A 1 0 0 3 5
+tank B 1 5 0 3 1
