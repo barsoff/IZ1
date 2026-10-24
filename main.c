@@ -1,6 +1,7 @@
 #include "battle.h"
 #include "config.h"
 #include "output.h"
+#include "threads.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -95,7 +96,15 @@ int main(int argc, char **argv) {
              b.team[0].mode == HOLD ? "hold" : "advance", b.team[1].mode == HOLD ? "hold" : "advance");
     out_field(&b);
     End end = battle_end(&b, &cfg);
-    /* Один цикл имитирует действия всех танков; фоновые потоки не создаются */
+    Threads threads;
+    Plan plan[MAX_TANKS];
+    int started = 0;
+    if (end == RUN && !stop) {
+        started = threads_start(&threads, &b);
+        if (!started) end = FAIL;
+    }
+
+    /* главный поток применяет намерения после ответа обеих сторон */
     while (end == RUN && !stop) {
         if (cfg.delay) {
             struct timespec ts = {.tv_sec = cfg.delay / 1000, .tv_nsec = (cfg.delay % 1000) * 1000000L};
@@ -109,7 +118,13 @@ int main(int argc, char **argv) {
             }
         }
         if (stop || end == FAIL) break;
-        battle_step(&b, &cfg);
+        ++b.step;
+        /* До завершения планирования ни один танк и ни одна клетка не меняются */
+        if (!threads_plan(&threads, plan)) {
+            end = FAIL;
+            break;
+        }
+        battle_step(&b, &cfg, plan);
         if (!battle_valid(&b)) {
             dprintf(STDERR_FILENO, "Ошибка: нарушены правила размещения танков или хранения снарядов.\n");
             end = FAIL;
@@ -118,7 +133,10 @@ int main(int argc, char **argv) {
         out_field(&b);
         end = battle_end(&b, &cfg);
     }
-    if (stop) end = STOP;
+    if (started && !threads_stop(&threads)) {
+        end = FAIL;
+    }
+    if (stop && end != FAIL) end = STOP;
     /* При любом результате, включая сигнал, сохраняем итог и закрываем файл */
     int ok = out_stats(fd, &b, end);
     if (!ok) dprintf(STDERR_FILENO, "Ошибка записи итогов: %s\n", strerror(errno));

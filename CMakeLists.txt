@@ -5,7 +5,10 @@ set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
-add_executable(IZ1 main.c battle.c config.c output.c)
+find_package(Threads REQUIRED)
+
+add_executable(IZ1 main.c battle.c config.c output.c threads.c)
+target_link_libraries(IZ1 PRIVATE Threads::Threads)
 set_target_properties(IZ1 PROPERTIES OUTPUT_NAME tanks)
 target_compile_definitions(IZ1 PRIVATE _POSIX_C_SOURCE=200809L)
 target_compile_options(IZ1 PRIVATE -Wall -Wextra -Wpedantic)

@@ -47,7 +47,15 @@ typedef struct {
     int seed, delay; /* Задержка вывода в миллисекундах */
 } Cfg;
 
-void battle_step(Battle *b, const Cfg *cfg);
+/* Намерение хранится отдельно от танка и не изменяет поле */
+typedef struct {
+    int x, y;
+    int dst;
+    int blocked;
+} Plan;
+
+void tank_plan(const Battle *b, int index, Plan *plan);
+void battle_step(Battle *b, const Cfg *cfg, Plan plan[]);
 End battle_end(const Battle *b, const Cfg *cfg);
 int alive(const Battle *b, int side);
 int battle_valid(const Battle *b);

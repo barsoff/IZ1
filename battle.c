@@ -1,15 +1,9 @@
 #include "battle.h"
+#include "output.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-
-/* Намерение хранится отдельно от танка и не изменяет поле */
-typedef struct {
-    int x, y;
-    int dst;
-    int blocked;
-} Plan;
 
 static int dist(int x, int y, const Tank *t) {
     return abs(x - t->x) + abs(y - t->y);
@@ -29,62 +23,44 @@ static int free_cell(const Battle *b, int x, int y) {
         && b->cell[y][x] != '#' && tank_at(b, x, y) < 0;
 }
 
-/* Координатор строит планы всей стороны по одному состоянию поля */
-static void team_plan(const Battle *b, int side, Plan plan[]) {
+/* каждый танк рассчитывает намерение по неизменному состоянию поля */
+void tank_plan(const Battle *b, int index, Plan *plan) {
     static const int dx[] = {0, 1, 0, -1};
     static const int dy[] = {-1, 0, 1, 0};
-    for (int i = 0; i < b->n; ++i) {
-        const Tank *t = &b->tank[i];
-        if (t->side != side || !t->hp) {
+    const Tank *t = &b->tank[index];
+    *plan = (Plan) {.x = t->x, .y = t->y, .dst = -1};
+    if (!t->hp) {
+        return;
+    }
+
+    int near = -1;
+    int best = MAX_W + MAX_H + 1;
+    for (int j = 0; j < b->n; ++j) {
+        const Tank *e = &b->tank[j];
+        if (e->side == t->side || !e->hp) {
             continue;
         }
-        Plan *p = &plan[i];
-        *p = (Plan) {.x = t->x, .y = t->y, .dst = -1};
-        int near = -1, best = MAX_W + MAX_H + 1, seen = 0;
-        for (int j = 0; j < b->n; ++j) {
-            const Tank *e = &b->tank[j];
-            if (e->side == side || !e->hp) {
-                continue;
-            }
-            int d = dist(t->x, t->y, e);
-            if (d < best || (d == best && e->id < b->tank[near].id)) {
-                near = j;
+        int d = dist(t->x, t->y, e);
+        if (near < 0 || d < best || (d == best && e->id < b->tank[near].id)) {
+            near = j;
+            best = d;
+        }
+    }
+    if (near >= 0 && best <= t->range) {
+        plan->dst = near;
+    }
+
+    /* Наступление: сближение до дальности стрельбы, без поиска обходных путей */
+    if (near >= 0 && best > t->range && b->team[t->side].mode == ADVANCE) {
+        for (int k = 0; k < 4; ++k) {
+            int x = t->x + dx[k];
+            int y = t->y + dy[k];
+            int d = dist(x, y, &b->tank[near]);
+            if (free_cell(b, x, y) && d < best) {
+                plan->x = x;
+                plan->y = y;
                 best = d;
             }
-            if (d <= t->range) {
-                ++seen;
-                dprintf(STDOUT_FILENO, "Такт %llu: %c%d наблюдает %c%d, расстояние %d.\n",
-                         b->step, 'A' + side, t->id, 'A' + e->side, e->id, d);
-            }
-        }
-        if (!seen) {
-            dprintf(STDOUT_FILENO, "Такт %llu: %c%d не наблюдает целей в дальности стрельбы.\n",
-                     b->step, 'A' + side, t->id);
-        }
-        if (near >= 0 && best <= t->range) {
-            p->dst = near;
-            const Tank *e = &b->tank[near];
-            dprintf(STDOUT_FILENO, "Такт %llu: %c%d выбирает цель %c%d, клетку (%d, %d).\n",
-                     b->step, 'A' + side, t->id, 'A' + e->side, e->id, e->x, e->y);
-        }
-        /* Наступление: сближение до дальности стрельбы, без поиска обходных путей */
-        if (near >= 0 && best > t->range && b->team[side].mode == ADVANCE) {
-            for (int k = 0; k < 4; ++k) {
-                int x = t->x + dx[k], y = t->y + dy[k];
-                int d = dist(x, y, &b->tank[near]);
-                if (free_cell(b, x, y) && d < best) {
-                    p->x = x;
-                    p->y = y;
-                    best = d;
-                }
-            }
-        }
-        if (p->x == t->x && p->y == t->y) {
-            dprintf(STDOUT_FILENO, "Такт %llu: %c%d намерен остаться в (%d, %d).\n",
-                     b->step, 'A' + side, t->id, t->x, t->y);
-        } else {
-            dprintf(STDOUT_FILENO, "Такт %llu: %c%d намерен перейти из (%d, %d) в (%d, %d).\n",
-                     b->step, 'A' + side, t->id, t->x, t->y, p->x, p->y);
         }
     }
 }
@@ -182,13 +158,9 @@ static void impact(Battle *b) {
     }
 }
 
-void battle_step(Battle *b, const Cfg *cfg) {
-    Plan plan[MAX_TANKS] = {0};
-    ++b->step;
+void battle_step(Battle *b, const Cfg *cfg, Plan plan[]) {
     dprintf(STDOUT_FILENO, "\n--- Такт %llu ---\n", b->step);
-    /* До завершения планирования ни один танк и ни одна клетка не меняются */
-    team_plan(b, 0, plan);
-    team_plan(b, 1, plan);
+    out_plans(b, plan);
     fire(b, cfg, plan);
     move(b, plan);
     impact(b);

@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -32,6 +33,46 @@ int out_open(const char *path, const char *src) {
         return -1;
     }
     return fd;
+}
+
+/* выводим намерения в порядке танков до изменения поля */
+void out_plans(const Battle *b, const Plan plan[]) {
+    for (int i = 0; i < b->n; ++i) {
+        const Tank *t = &b->tank[i];
+        if (!t->hp) {
+            continue;
+        }
+        int seen = 0;
+        for (int j = 0; j < b->n; ++j) {
+            const Tank *e = &b->tank[j];
+            if (e->side == t->side || !e->hp) {
+                continue;
+            }
+            int d = abs(t->x - e->x) + abs(t->y - e->y);
+            if (d <= t->range) {
+                ++seen;
+                dprintf(STDOUT_FILENO, "Такт %llu: %c%d наблюдает %c%d, расстояние %d.\n",
+                         b->step, 'A' + t->side, t->id, 'A' + e->side, e->id, d);
+            }
+        }
+        if (!seen) {
+            dprintf(STDOUT_FILENO, "Такт %llu: %c%d не наблюдает целей в дальности стрельбы.\n",
+                     b->step, 'A' + t->side, t->id);
+        }
+        const Plan *p = &plan[i];
+        if (p->dst >= 0) {
+            const Tank *e = &b->tank[p->dst];
+            dprintf(STDOUT_FILENO, "Такт %llu: %c%d выбирает цель %c%d, клетку (%d, %d).\n",
+                     b->step, 'A' + t->side, t->id, 'A' + e->side, e->id, e->x, e->y);
+        }
+        if (p->x == t->x && p->y == t->y) {
+            dprintf(STDOUT_FILENO, "Такт %llu: %c%d намерен остаться в (%d, %d).\n",
+                     b->step, 'A' + t->side, t->id, t->x, t->y);
+        } else {
+            dprintf(STDOUT_FILENO, "Такт %llu: %c%d намерен перейти из (%d, %d) в (%d, %d).\n",
+                     b->step, 'A' + t->side, t->id, t->x, t->y, p->x, p->y);
+        }
+    }
 }
 
 void out_field(const Battle *b) {

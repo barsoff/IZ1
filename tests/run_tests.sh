@@ -100,6 +100,12 @@ run demo --seed 37
 cmp "$tmp/demo.log" "$tmp/first.log" || fail 'бой не воспроизводится'
 n=$((n + 1))
 
+for ((repeat = 0; repeat < 8; ++repeat)); do
+    run demo --seed 37
+    cmp "$tmp/demo.log" "$tmp/first.log" || fail 'порядок выполнения потоков изменил бой'
+    n=$((n + 1))
+done
+
 # Порядок строк с танками не должен давать преимущество стороне.
 grep -v '^tank ' "$dir/data/demo.txt" > "$tmp/reversed.txt"
 grep '^tank ' "$dir/data/demo.txt" | tac >> "$tmp/reversed.txt"
@@ -162,9 +168,11 @@ lacks "$tmp/max.log" 'нарушены правила'
 # Сигнал подаётся только после того, как программа действительно начала бой.
 interrupt() {
     local sig=$1
-    shift
+    local delay=$2
+    local expected=$3
+    shift 3
     : > "$tmp/signal.out"
-    "$bin" "$@" --delay 30 --log "$tmp/signal.log" > "$tmp/signal.out" &
+    "$bin" "$@" --delay "$delay" --log "$tmp/signal.log" > "$tmp/signal.out" &
     pid=$!
     ready=0
     for ((i = 0; i < 100; ++i)); do
@@ -175,6 +183,9 @@ interrupt() {
         sleep 0.02
     done
     [[ "$ready" == 1 ]] || fail 'программа не начала бой перед проверкой сигнала'
+    local tasks=(/proc/"$pid"/task/*)
+    [[ "${#tasks[@]}" == "$expected" ]] || fail "ожидалось $expected потоков, найдено ${#tasks[@]}"
+    n=$((n + 1))
     kill -s "$sig" "$pid"
     rc=0
     wait "$pid" || rc=$?
@@ -188,9 +199,13 @@ interrupt() {
 }
 
 # Бесконечный сценарий из файла и конечный встроенный пример.
-interrupt INT --config "$dir/data/conflict.txt" --limit 0
-interrupt TERM --config "$dir/data/conflict.txt" --limit 0
-interrupt INT --limit 100
-interrupt TERM --limit 100
+interrupt INT 30 5 --config "$dir/data/conflict.txt" --limit 0
+interrupt TERM 30 5 --config "$dir/data/conflict.txt" --limit 0
+interrupt INT 30 7 --limit 100
+interrupt TERM 30 7 --limit 100
+
+# без задержки сигнал может поступить во время ожидания ответов потоков
+interrupt INT 0 5 --config "$dir/data/conflict.txt" --limit 0
+interrupt TERM 0 5 --config "$dir/data/conflict.txt" --limit 0
 
 echo "OK: $n проверок пройдено."
