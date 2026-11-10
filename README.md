@@ -1,8 +1,9 @@
 # Танковые бои
 
-Многопоточная консольная модель боя двух сторон на C для Linux.
+Многопроцессная модель боя на C для Linux, вариант 24
+Процесс стороны рассчитывает планы семейства танков, координатор применяет их после ответа обеих сторон
 
-Отчет доступен в [PDF](report.pdf).
+Отчет доступен в [PDF](report.pdf)
 
 ## Сборка и запуск
 
@@ -11,21 +12,28 @@
 ```bash
 cmake -S . -B build
 cmake --build build
-./build/tanks
-```
-
-Без параметров запускается встроенный пример. Запуск с данными из файла:
-
-```bash
 ./build/tanks --config data/demo.txt --seed 24 --delay 200 --log battle.log
+./build/tanks-unnamed
 ./build/tanks --help
 ```
 
-События боя выводятся на экран, итоги сохраняются в `battle.log`.
-Для прерывания нажмите Ctrl+C.
+`tanks` - дочерние процессы с именованными POSIX-семафорами, `tanks-unnamed` - с неименованными в разделяемой памяти
+Обмен в обеих версиях - через POSIX shared memory, без параметров запускается встроенный пример
+
+Независимые процессы с именованными семафорами и POSIX shared memory запускаются в трёх терминалах, стороны - после сообщения «IPC готов»:
+
+```bash
+./build/tanks-ipc --ipc /battle24 --config data/demo.txt
+./build/tanks-team /battle24 A
+./build/tanks-team /battle24 B
+```
+
+Ожидание сторон - 30 секунд, ответа в бою - 5 секунд
+События выводятся на экран, итоги сохраняются в `battle.log`
+Ctrl+C завершает бой, координатор удаляет семафоры и память
 
 ## Проверка
 
 ```bash
-bash tests/run_tests.sh ./build/tanks
+ctest --test-dir build --output-on-failure
 ```

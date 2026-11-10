@@ -1,7 +1,7 @@
 #include "battle.h"
 #include "config.h"
 #include "output.h"
-#include "threads.h"
+#include "proc.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -29,7 +29,8 @@ static void help(void) {
             "  --delay N       задержка между тактами, 0..10000 мс\n"
             "  --limit N       предел тактов, 0..1000000; 0 — до победы или Ctrl+C\n"
             "  --help          показать справку\n"
-            "Параметры командной строки имеют приоритет над файлом.\n");
+            "  --ipc /NAME     имя сеанса для tanks-ipc (стороны запускаются отдельно)\n"
+            "Параметры командной строки имеют приоритет над файлом\n");
 }
 
 int main(int argc, char **argv) {
@@ -38,6 +39,8 @@ int main(int argc, char **argv) {
     cfg_default(&cfg, &b);
     const char *src = NULL, *log = "battle.log";
     int seed = -1, delay = -1, limit = -1;
+    char ipc[64];
+    snprintf(ipc, sizeof(ipc), "/tanks_%ld", (long) getpid());
     for (int i = 1; i < argc; ++i) {
         const char *key = argv[i];
         if (!strcmp(key, "--help")) {
@@ -45,7 +48,8 @@ int main(int argc, char **argv) {
             return 0;
         }
         if (strcmp(key, "--config") && strcmp(key, "--log") && strcmp(key, "--seed")
-            && strcmp(key, "--delay") && strcmp(key, "--limit")) {
+            && strcmp(key, "--delay") && strcmp(key, "--limit")
+            && (MODE != 2 || strcmp(key, "--ipc"))) {
             dprintf(STDERR_FILENO, "Неизвестный аргумент: %s. См. --help.\n", key);
             return 1;
         }
@@ -53,7 +57,13 @@ int main(int argc, char **argv) {
             dprintf(STDERR_FILENO, "Не задано значение %s.\n", key);
             return 1;
         }
-        if (!strcmp(key, "--config")) {
+        if (!strcmp(key, "--ipc")) {
+            if (strlen(argv[i]) >= sizeof(ipc)) {
+                dprintf(STDERR_FILENO, "Имя IPC должно быть короче %zu символов\n", sizeof(ipc));
+                return 1;
+            }
+            strcpy(ipc, argv[i]);
+        } else if (!strcmp(key, "--config")) {
             src = argv[i];
         } else if (!strcmp(key, "--log")) {
             log = argv[i];
@@ -70,7 +80,6 @@ int main(int argc, char **argv) {
     if (seed >= 0) cfg.seed = seed;
     if (delay >= 0) cfg.delay = delay;
     if (limit >= 0) cfg.limit = limit;
-
     struct sigaction sa = {0};
     sa.sa_handler = on_stop;
     sigemptyset(&sa.sa_mask);
@@ -96,15 +105,14 @@ int main(int argc, char **argv) {
              b.team[0].mode == HOLD ? "hold" : "advance", b.team[1].mode == HOLD ? "hold" : "advance");
     out_field(&b);
     End end = battle_end(&b, &cfg);
-    Threads threads;
+    Proc proc;
     Plan plan[MAX_TANKS];
     int started = 0;
     if (end == RUN && !stop) {
-        started = threads_start(&threads, &b);
-        if (!started) end = FAIL;
+        started = proc_start(&proc, MODE != 1, MODE == 2, ipc, &stop);
+        if (!started) end = stop ? STOP : FAIL;
     }
-
-    /* главный поток применяет намерения после ответа обеих сторон */
+    /* Координатор применяет намерения после ответа обеих сторон */
     while (end == RUN && !stop) {
         if (cfg.delay) {
             struct timespec ts = {.tv_sec = cfg.delay / 1000, .tv_nsec = (cfg.delay % 1000) * 1000000L};
@@ -120,8 +128,8 @@ int main(int argc, char **argv) {
         if (stop || end == FAIL) break;
         ++b.step;
         /* До завершения планирования ни один танк и ни одна клетка не меняются */
-        if (!threads_plan(&threads, plan)) {
-            end = FAIL;
+        if (!proc_plan(&proc, &b, plan)) {
+            end = stop ? STOP : FAIL;
             break;
         }
         battle_step(&b, &cfg, plan);
@@ -133,7 +141,7 @@ int main(int argc, char **argv) {
         out_field(&b);
         end = battle_end(&b, &cfg);
     }
-    if (started && !threads_stop(&threads)) {
+    if (started && !proc_close(&proc)) {
         end = FAIL;
     }
     if (stop && end != FAIL) end = STOP;

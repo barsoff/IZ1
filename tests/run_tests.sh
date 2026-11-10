@@ -5,9 +5,11 @@ dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 bin=$(realpath -- "${1:-$dir/build/tanks}")
 tmp=$(mktemp -d)
 pid=''
+kids=()
 n=0
 
 cleanup() {
+    for child in "${kids[@]}"; do kill -KILL "$child" 2>/dev/null || true; done
     if [[ -n "$pid" ]]; then
         kill -TERM "$pid" 2>/dev/null || true
         wait "$pid" 2>/dev/null || true
@@ -102,7 +104,7 @@ n=$((n + 1))
 
 for ((repeat = 0; repeat < 8; ++repeat)); do
     run demo --seed 37
-    cmp "$tmp/demo.log" "$tmp/first.log" || fail 'порядок выполнения потоков изменил бой'
+    cmp "$tmp/demo.log" "$tmp/first.log" || fail 'порядок выполнения процессов изменил бой'
     n=$((n + 1))
 done
 
@@ -169,10 +171,11 @@ lacks "$tmp/max.log" 'нарушены правила'
 interrupt() {
     local sig=$1
     local delay=$2
-    local expected=$3
-    shift 3
+    shift 2
     : > "$tmp/signal.out"
-    "$bin" "$@" --delay "$delay" --log "$tmp/signal.log" > "$tmp/signal.out" &
+    local cmd=("$bin")
+    if [[ "$sig" == GROUP ]]; then cmd=(setsid "$bin"); fi
+    "${cmd[@]}" "$@" --delay "$delay" --log "$tmp/signal.log" > "$tmp/signal.out" &
     pid=$!
     ready=0
     for ((i = 0; i < 100; ++i)); do
@@ -183,29 +186,59 @@ interrupt() {
         sleep 0.02
     done
     [[ "$ready" == 1 ]] || fail 'программа не начала бой перед проверкой сигнала'
-    local tasks=(/proc/"$pid"/task/*)
-    [[ "${#tasks[@]}" == "$expected" ]] || fail "ожидалось $expected потоков, найдено ${#tasks[@]}"
+    local children
+    children=$(cat /proc/"$pid"/task/"$pid"/children)
+    local pids=($children)
+    [[ "${#pids[@]}" == 2 ]] || fail "ожидалось 2 дочерних процесса, найдено ${#pids[@]}"
     n=$((n + 1))
-    kill -s "$sig" "$pid"
+    kids=("${pids[@]}")
+    case "$sig" in
+        STOP) kill -STOP "${pids[0]}"; kill -INT "$pid" ;;
+        KILL) kill -KILL "${pids[0]}" ;;
+        GROUP) kill -INT -- "-$pid" ;;
+        *) kill -s "$sig" "$pid" ;;
+    esac
+    for ((i = 0; i < 200; ++i)); do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.05
+    done
+    kill -0 "$pid" 2>/dev/null && fail 'координатор завис при завершении'
     rc=0
     wait "$pid" || rc=$?
+    [[ ! -e /dev/shm/tanks_$pid ]] || fail 'осталась разделяемая память'
+    local sems=(/dev/shm/sem.tanks_"$pid"_s*)
+    [[ ! -e "${sems[0]}" ]] || fail 'остались семафоры'
+    for child in "${pids[@]}"; do
+        [[ ! -e /proc/$child ]] || fail 'дочерний процесс не завершился'
+    done
     pid=''
+    kids=()
     exp=130
     if [[ "$sig" == TERM ]]; then exp=143; fi
+    if [[ "$sig" == STOP || "$sig" == KILL ]]; then exp=1; fi
     [[ "$rc" == "$exp" ]] || fail "неверный код завершения по SIG$sig: $rc"
-    has "$tmp/signal.log" 'Причина: Прервано пользователем'
+    if [[ "$exp" == 1 ]]; then
+        has "$tmp/signal.log" 'Причина: Ошибка выполнения'
+    else
+        has "$tmp/signal.log" 'Причина: Прервано пользователем'
+    fi
     has "$tmp/signal.log" '=== Итоги ==='
     tail -n 7 "$tmp/signal.out" | cmp "$tmp/signal.log" - || fail 'итоги прерывания не попали в журнал'
 }
 
 # Бесконечный сценарий из файла и конечный встроенный пример.
-interrupt INT 30 5 --config "$dir/data/conflict.txt" --limit 0
-interrupt TERM 30 5 --config "$dir/data/conflict.txt" --limit 0
-interrupt INT 30 7 --limit 100
-interrupt TERM 30 7 --limit 100
+interrupt INT 30 --config "$dir/data/conflict.txt" --limit 0
+interrupt TERM 30 --config "$dir/data/conflict.txt" --limit 0
+interrupt INT 30 --limit 100
+interrupt TERM 30 --limit 100
 
-# без задержки сигнал может поступить во время ожидания ответов потоков
-interrupt INT 0 5 --config "$dir/data/conflict.txt" --limit 0
-interrupt TERM 0 5 --config "$dir/data/conflict.txt" --limit 0
+# без задержки сигнал может поступить во время ожидания ответов процессов
+interrupt INT 0 --config "$dir/data/conflict.txt" --limit 0
+interrupt TERM 0 --config "$dir/data/conflict.txt" --limit 0
+
+# Сбой дочернего процесса и сигнал всей группе
+for sig in STOP KILL GROUP; do
+    interrupt "$sig" 30 --config "$dir/data/conflict.txt" --limit 0
+done
 
 echo "OK: $n проверок пройдено."
