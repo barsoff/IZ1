@@ -42,7 +42,7 @@ typedef struct {
 } Battle;
 
 typedef struct {
-    int limit; /* 0 — работа до победы или прерывания */
+    int limit; /* 0 - работа до победы или прерывания */
     int acc, fly;
     int seed, delay; /* Задержка вывода в миллисекундах */
 } Cfg;
@@ -55,6 +55,8 @@ typedef struct {
 } Plan;
 
 void tank_plan(const Battle *b, int index, Plan *plan);
+int plan_valid(const Battle *b, int i, const Plan *p);
+void battle_step_fd(int fd, Battle *b, const Cfg *cfg, Plan plan[]);
 void battle_step(Battle *b, const Cfg *cfg, Plan plan[]);
 End battle_end(const Battle *b, const Cfg *cfg);
 int alive(const Battle *b, int side);
