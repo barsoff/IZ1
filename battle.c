@@ -65,7 +65,7 @@ void tank_plan(const Battle *b, int index, Plan *plan) {
     }
 }
 
-static void fire(Battle *b, const Cfg *cfg, const Plan plan[]) {
+static void fire(int fd, Battle *b, const Cfg *cfg, const Plan plan[]) {
     for (int i = 0; i < b->n; ++i) {
         const Tank *t = &b->tank[i];
         if (!t->hp || plan[i].dst < 0) {
@@ -76,12 +76,12 @@ static void fire(Battle *b, const Cfg *cfg, const Plan plan[]) {
                   .hit = rand() % 100 < cfg->acc, .due = b->step + (unsigned) cfg->fly};
         b->shot[b->ns++] = s;
         ++b->team[t->side].fired;
-        dprintf(STDOUT_FILENO, "Такт %llu: %c%d стреляет из (%d, %d) в (%d, %d); прилёт на такте %llu.\n",
+        dprintf(fd, "Такт %llu: %c%d стреляет из (%d, %d) в (%d, %d); прилёт на такте %llu.\n",
                  b->step, 'A' + t->side, t->id, t->x, t->y, s.x, s.y, s.due);
     }
 }
 
-static void move(Battle *b, Plan plan[]) {
+static void move(int fd, Battle *b, Plan plan[]) {
     /* Сначала находим все конфликты. Изменять планы при поиске нельзя */
     int conflicts = 0;
     for (int i = 0; i < b->n; ++i) {
@@ -92,28 +92,28 @@ static void move(Battle *b, Plan plan[]) {
             if (b->tank[j].hp && plan[i].x == plan[j].x && plan[i].y == plan[j].y) {
                 plan[i].blocked = plan[j].blocked = 1;
                 const Tank *a = &b->tank[i], *c = &b->tank[j];
-                dprintf(STDOUT_FILENO, "Такт %llu: конфликт %c%d и %c%d за (%d, %d); оба остаются на месте.\n",
+                dprintf(fd, "Такт %llu: конфликт %c%d и %c%d за (%d, %d); оба остаются на месте.\n",
                          b->step, 'A' + a->side, a->id, 'A' + c->side, c->id, plan[i].x, plan[i].y);
                 ++conflicts;
             }
         }
     }
     if (!conflicts) {
-        dprintf(STDOUT_FILENO, "Такт %llu: конфликтов клеток нет.\n", b->step);
+        dprintf(fd, "Такт %llu: конфликтов клеток нет.\n", b->step);
     }
     for (int i = 0; i < b->n; ++i) {
         Tank *t = &b->tank[i];
         if (!t->hp || plan[i].blocked || (plan[i].x == t->x && plan[i].y == t->y)) {
             continue;
         }
-        dprintf(STDOUT_FILENO, "Такт %llu: %c%d переместился из (%d, %d) в (%d, %d).\n",
+        dprintf(fd, "Такт %llu: %c%d переместился из (%d, %d) в (%d, %d).\n",
                  b->step, 'A' + t->side, t->id, t->x, t->y, plan[i].x, plan[i].y);
         t->x = plan[i].x;
         t->y = plan[i].y;
     }
 }
 
-static void impact(Battle *b) {
+static void impact(int fd, Battle *b) {
     int dmg[MAX_TANKS] = {0};
     int left = 0;
     for (int i = 0; i < b->ns; ++i) {
@@ -126,17 +126,17 @@ static void impact(Battle *b) {
         int j = tank_at(b, s.x, s.y);
         if (!s.hit) {
             ++b->team[src->side].miss;
-            dprintf(STDOUT_FILENO, "Такт %llu: снаряд %c%d промахнулся по клетке (%d, %d).\n",
+            dprintf(fd, "Такт %llu: снаряд %c%d промахнулся по клетке (%d, %d).\n",
                      b->step, 'A' + src->side, src->id, s.x, s.y);
         } else if (j < 0 || !b->tank[j].hp) {
             ++b->team[src->side].miss;
-            dprintf(STDOUT_FILENO, "Такт %llu: снаряд %c%d достиг (%d, %d), действующего танка там нет.\n",
+            dprintf(fd, "Такт %llu: снаряд %c%d достиг (%d, %d), действующего танка там нет.\n",
                      b->step, 'A' + src->side, src->id, s.x, s.y);
         } else {
             const Tank *dst = &b->tank[j];
             ++b->team[src->side].hit;
             ++dmg[j];
-            dprintf(STDOUT_FILENO, "Такт %llu: снаряд %c%d попал в %c%d в (%d, %d).\n",
+            dprintf(fd, "Такт %llu: снаряд %c%d попал в %c%d в (%d, %d).\n",
                      b->step, 'A' + src->side, src->id, 'A' + dst->side, dst->id, s.x, s.y);
         }
     }
@@ -149,21 +149,37 @@ static void impact(Battle *b) {
         }
         int old = t->hp;
         t->hp = old > dmg[i] ? old - dmg[i] : 0;
-        dprintf(STDOUT_FILENO, "Такт %llu: %c%d получил урон %d, прочность %d -> %d.\n",
+        dprintf(fd, "Такт %llu: %c%d получил урон %d, прочность %d -> %d.\n",
                  b->step, 'A' + t->side, t->id, dmg[i], old, t->hp);
         if (!t->hp) {
-            dprintf(STDOUT_FILENO, "Такт %llu: %c%d уничтожен, обломки остаются в (%d, %d).\n",
+            dprintf(fd, "Такт %llu: %c%d уничтожен, обломки остаются в (%d, %d).\n",
                      b->step, 'A' + t->side, t->id, t->x, t->y);
         }
     }
 }
 
+void battle_step_fd(int fd, Battle *b, const Cfg *cfg, Plan plan[]) {
+    dprintf(fd, "\n--- Такт %llu ---\n", b->step);
+    out_plans_fd(fd, b, plan, -1);
+    fire(fd, b, cfg, plan);
+    move(fd, b, plan);
+    impact(fd, b);
+}
+
 void battle_step(Battle *b, const Cfg *cfg, Plan plan[]) {
-    dprintf(STDOUT_FILENO, "\n--- Такт %llu ---\n", b->step);
-    out_plans(b, plan);
-    fire(b, cfg, plan);
-    move(b, plan);
-    impact(b);
+    battle_step_fd(STDOUT_FILENO, b, cfg, plan);
+}
+
+int plan_valid(const Battle *b, int i, const Plan *p) {
+    const Tank *t = &b->tank[i];
+    if (p->x < 0 || p->x >= b->w || p->y < 0 || p->y >= b->h
+        || p->dst < -1 || p->dst >= b->n) return 0;
+    int d = dist(p->x, p->y, t);
+    if (d && (d != 1 || !t->hp || b->team[t->side].mode != ADVANCE
+              || !free_cell(b, p->x, p->y))) return 0;
+    if (p->dst < 0) return 1;
+    const Tank *e = &b->tank[p->dst];
+    return t->hp && e->hp && e->side != t->side && dist(t->x, t->y, e) <= t->range;
 }
 
 int alive(const Battle *b, int side) {

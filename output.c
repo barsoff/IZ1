@@ -36,10 +36,10 @@ int out_open(const char *path, const char *src) {
 }
 
 /* выводим намерения в порядке танков до изменения поля */
-void out_plans(const Battle *b, const Plan plan[]) {
+void out_plans_fd(int fd, const Battle *b, const Plan plan[], int side) {
     for (int i = 0; i < b->n; ++i) {
         const Tank *t = &b->tank[i];
-        if (!t->hp) {
+        if (!t->hp || (side >= 0 && t->side != side)) {
             continue;
         }
         int seen = 0;
@@ -51,68 +51,70 @@ void out_plans(const Battle *b, const Plan plan[]) {
             int d = abs(t->x - e->x) + abs(t->y - e->y);
             if (d <= t->range) {
                 ++seen;
-                dprintf(STDOUT_FILENO, "Такт %llu: %c%d наблюдает %c%d, расстояние %d.\n",
+                dprintf(fd, "Такт %llu: %c%d наблюдает %c%d, расстояние %d.\n",
                          b->step, 'A' + t->side, t->id, 'A' + e->side, e->id, d);
             }
         }
         if (!seen) {
-            dprintf(STDOUT_FILENO, "Такт %llu: %c%d не наблюдает целей в дальности стрельбы.\n",
+            dprintf(fd, "Такт %llu: %c%d не наблюдает целей в дальности стрельбы.\n",
                      b->step, 'A' + t->side, t->id);
         }
         const Plan *p = &plan[i];
         if (p->dst >= 0) {
             const Tank *e = &b->tank[p->dst];
-            dprintf(STDOUT_FILENO, "Такт %llu: %c%d выбирает цель %c%d, клетку (%d, %d).\n",
+            dprintf(fd, "Такт %llu: %c%d выбирает цель %c%d, клетку (%d, %d).\n",
                      b->step, 'A' + t->side, t->id, 'A' + e->side, e->id, e->x, e->y);
         }
         if (p->x == t->x && p->y == t->y) {
-            dprintf(STDOUT_FILENO, "Такт %llu: %c%d намерен остаться в (%d, %d).\n",
+            dprintf(fd, "Такт %llu: %c%d намерен остаться в (%d, %d).\n",
                      b->step, 'A' + t->side, t->id, t->x, t->y);
         } else {
-            dprintf(STDOUT_FILENO, "Такт %llu: %c%d намерен перейти из (%d, %d) в (%d, %d).\n",
+            dprintf(fd, "Такт %llu: %c%d намерен перейти из (%d, %d) в (%d, %d).\n",
                      b->step, 'A' + t->side, t->id, t->x, t->y, p->x, p->y);
         }
     }
 }
 
-void out_field(const Battle *b) {
+void out_field_fd(int fd, const Battle *b) {
     char cell[MAX_H][MAX_W];
     memcpy(cell, b->cell, sizeof(cell));
     for (int i = 0; i < b->n; ++i) {
         const Tank *t = &b->tank[i];
         cell[t->y][t->x] = t->hp ? (char) ('A' + t->side) : 'X';
     }
-    dprintf(STDOUT_FILENO, "Поле после такта %llu:\n    ", b->step);
+    dprintf(fd, "Поле после такта %llu:\n    ", b->step);
     for (int x = 0; x < b->w; ++x) {
-        dprintf(STDOUT_FILENO, "%2d ", x);
+        dprintf(fd, "%2d ", x);
     }
-    dprintf(STDOUT_FILENO, "\n");
+    dprintf(fd, "\n");
     for (int y = 0; y < b->h; ++y) {
-        dprintf(STDOUT_FILENO, "%2d  ", y);
+        dprintf(fd, "%2d  ", y);
         for (int x = 0; x < b->w; ++x) {
-            dprintf(STDOUT_FILENO, " %c ", cell[y][x]);
+            dprintf(fd, " %c ", cell[y][x]);
         }
-        dprintf(STDOUT_FILENO, "\n");
+        dprintf(fd, "\n");
     }
     for (int i = 0; i < b->n; ++i) {
         const Tank *t = &b->tank[i];
-        dprintf(STDOUT_FILENO, "  %c%d: (%d, %d), прочность %d, дальность %d%s\n",
+        dprintf(fd, "  %c%d: (%d, %d), прочность %d, дальность %d%s\n",
                  'A' + t->side, t->id, t->x, t->y, t->hp, t->range, t->hp ? "" : ", уничтожен");
+    }
+}
+
+const char *out_end(End end) {
+    switch (end) {
+        case WIN_A: return "Победа стороны A";
+        case WIN_B: return "Победа стороны B";
+        case DRAW: return "Ничья: обе стороны уничтожены или отсутствуют";
+        case LIMIT: return "Достигнут лимит тактов";
+        case STOP: return "Прервано пользователем";
+        default: return "Ошибка выполнения";
     }
 }
 
 /* Один и тот же итог выводим на экран и в файл через переданный дескриптор */
 int out_stats(int fd, const Battle *b, End end) {
-    const char *msg = "Ошибка выполнения";
-    switch (end) {
-        case WIN_A: msg = "Победа стороны A"; break;
-        case WIN_B: msg = "Победа стороны B"; break;
-        case DRAW: msg = "Ничья: обе стороны уничтожены или отсутствуют"; break;
-        case LIMIT: msg = "Достигнут лимит тактов"; break;
-        case STOP: msg = "Прервано пользователем"; break;
-        default: break;
-    }
-    int ok = dprintf(fd, "\n=== Итоги ===\nПричина: %s\nТактов: %llu\n", msg, b->step) >= 0;
+    int ok = dprintf(fd, "\n=== Итоги ===\nПричина: %s\nТактов: %llu\n", out_end(end), b->step) >= 0;
     for (int side = 0; side < 2; ++side) {
         int total = 0, pending = 0;
         for (int i = 0; i < b->n; ++i) total += b->tank[i].side == side;
@@ -127,4 +129,8 @@ int out_stats(int fd, const Battle *b, End end) {
         ok = 0;
     }
     return ok;
+}
+
+void out_field(const Battle *b) {
+    out_field_fd(STDOUT_FILENO, b);
 }

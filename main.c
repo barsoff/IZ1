@@ -1,7 +1,11 @@
 #include "battle.h"
 #include "config.h"
 #include "output.h"
+#if MODE == 3
+#include "net.h"
+#else
 #include "proc.h"
+#endif
 
 #include <errno.h>
 #include <limits.h>
@@ -22,14 +26,20 @@ static void on_stop(int sig) {
 static void help(void) {
     dprintf(STDOUT_FILENO,
             "Танковые бои, вариант 24\n"
+#if MODE == 3
+            "Использование: tanks-server IP PORT [параметры]\n"
+#else
             "Использование: tanks [параметры]\n"
+#endif
             "  --config PATH   текстовый сценарий (по умолчанию встроенный пример)\n"
             "  --log PATH      файл итогов (по умолчанию battle.log; перезаписывается)\n"
             "  --seed N        начальное значение генератора, 0..2147483647\n"
             "  --delay N       задержка между тактами, 0..10000 мс\n"
-            "  --limit N       предел тактов, 0..1000000; 0 — до победы или Ctrl+C\n"
+            "  --limit N       предел тактов, 0..1000000; 0 - до победы или Ctrl+C\n"
             "  --help          показать справку\n"
+#if MODE != 3
             "  --ipc /NAME     имя сеанса для tanks-ipc (стороны запускаются отдельно)\n"
+#endif
             "Параметры командной строки имеют приоритет над файлом\n");
 }
 
@@ -41,7 +51,15 @@ int main(int argc, char **argv) {
     int seed = -1, delay = -1, limit = -1;
     char ipc[64];
     snprintf(ipc, sizeof(ipc), "/tanks_%ld", (long) getpid());
-    for (int i = 1; i < argc; ++i) {
+    int arg = 1;
+#if MODE == 3
+    if (argc < 3 || !strcmp(argv[1], "--help")) {
+        help();
+        return argc >= 2 && !strcmp(argv[1], "--help") ? 0 : 1;
+    }
+    arg = 3;
+#endif
+    for (int i = arg; i < argc; ++i) {
         const char *key = argv[i];
         if (!strcmp(key, "--help")) {
             help();
@@ -93,13 +111,16 @@ int main(int argc, char **argv) {
         dprintf(STDERR_FILENO, "Не удалось настроить SIGPIPE.\n");
         return 1;
     }
+    srand((unsigned) cfg.seed);
+#if MODE == 3
+    return net_run(argv[1], argv[2], &b, &cfg, log, src, &stop);
+#else
     int fd = out_open(log, src);
     if (fd < 0) return 1;
-    srand((unsigned) cfg.seed);
-    dprintf(STDOUT_FILENO, "Танковые бои — вариант 24\n"
+    dprintf(STDOUT_FILENO, "Танковые бои - вариант 24\n"
              "Поле %dx%d; seed=%d; точность=%d%%; полёт=%d; лимит=%d; задержка=%d мс.\n"
-             "Стратегии: A=%s, B=%s. Стрельба навесная; урон одного попадания — 1.\n"
-             "Обозначения: . — свободно, # — препятствие, A/B — танки, X — обломки.\n"
+             "Стратегии: A=%s, B=%s. Стрельба навесная; урон одного попадания - 1.\n"
+             "Обозначения: . - свободно, # - препятствие, A/B - танки, X - обломки.\n"
              "Координаты (x, y) начинаются с нуля. Остановка: Ctrl+C.\n",
              b.w, b.h, cfg.seed, cfg.acc, cfg.fly, cfg.limit, cfg.delay,
              b.team[0].mode == HOLD ? "hold" : "advance", b.team[1].mode == HOLD ? "hold" : "advance");
@@ -155,4 +176,5 @@ int main(int argc, char **argv) {
     }
     if (!ok || end == FAIL) return 1;
     return stop ? 128 + stop : 0;
+#endif
 }
